@@ -1,166 +1,120 @@
-# Generative AI Chat Application with Azure AI Foundry
+# Agentic Travel Assistant with Multi-Tool Routing (RAG & Web Search)
 
-An implementation of a multi-turn, contextual Generative AI chat application built using the modern **OpenAI Python SDK**, **Azure Identity**, and **Azure AI Foundry**. 
+An intelligent, context-aware travel assistant built using the modern **OpenAI Python SDK**, **Azure Identity**, and **Azure AI Foundry**. 
 
-This repository documents my completion of a comprehensive exercise to build, optimize, and scale an AI-driven chat client using state-of-the-art cloud endpoints, transitioning from legacy paradigms to the modern, context-aware Responses API.
-
----
-
-## 🚀 Project Overview & Key Learning Objectives
-
-The goal of this project was to move beyond basic API consumption and develop a robust, production-grade CLI chat interface capable of:
-* **Secure Authentication:** Leveraging Azure Entra ID via `DefaultAzureCredential` instead of hardcoded API keys.
-* **Modern API Integration:** Migrating from the standard `ChatCompletions` endpoint to the streamlined, stateful `Responses` API.
-* **State & Context Retention:** Building explicit conversational tracking to enable multi-turn dialogue.
-* **User Experience Optimization:** Implementing token streaming (`stream=True`) to resolve terminal UI latency.
-* **Asynchronous Scaling:** Building a concurrent, non-blocking client version using Python's `asyncio` framework.
+This project demonstrates the implementation of an agentic workflow where a Large Language Model (`gpt-4.1`) dynamically routes user queries between an on-demand vector store containing internal company assets (Retrieval-Augmented Generation) and a live web search tool to fetch real-time destination data.
 
 ---
 
-## 🛠️ Architecture & Core Mechanics
+## 🚀 Project Overview & Key Features
 
-The client application hooks into a custom model deployment hosted within my Microsoft Foundry Project ecosystem:
+The application serves as a automated advisor for *Margie's Travel* clients, moving beyond static model knowledge by executing autonomous tool-calling:
+* **Dynamic Multi-Tool Functionality:** Combines a local vector store search (`file_search`) with live internet queries (`web_search`).
+* **On-the-Fly Vectorization:** Programmatically initializes a vector store, aggregates local unstructured documentation (PDF brochures), and uploads/polls the batch during runtime initialization.
+* **Stateful Conversations:** Tracks execution states across user turns via sequential response ID pairing to ensure seamless multi-turn reasoning.
+* **Enterprise-Grade Identity Layer:** Uses Microsoft Entra ID token-based credential scoping (`DefaultAzureCredential`) for passwordless access to Azure OpenAI service boundaries.
 
-* **Host Environment:** Azure AI Foundry Portal (`https://ai.azure.com`)
-* **Model Backbone:** `gpt-4.1` (Deployed securely under a dedicated Azure Resource Group)
-* **Authentication Flow:** Token-based provider querying Azure Entra ID via the local Azure CLI session credentials (`az login`).
+---
+
+## 🛠️ Architecture Flow & Mechanics
+
+When a user submits a prompt, the application coordinates multiple actions:
+1. **Initialization:** The app spins up, scans the internal directory for product documentation, compiles a temporary vector store embedding layout, and hooks into Azure OpenAI endpoints.
+2. **Analysis:** The model interprets the user's intent. 
+3. **Execution Routing:** * If the query regards internal booking structures or specific company partnerships, it executes a `file_search` tool constraint over the vectorized asset store.
+   * If the query asks for real-time local dynamics, flight status, or current events, it switches execution pathways to a concurrent `web_search`.
 
 ---
 
 ## 📂 Repository Structure
 
 ```text
-├── .env                  # Project Configuration (Endpoints & Deployments)
-├── .gitignore            # Ignores local Python virtual environment (.venv)
-├── requirements.txt      # Project Dependencies (OpenAI, Azure-Identity)
-├── chat-app.py           # Synchronous implementation (ChatCompletions -> Responses + Streaming)
-└── chat-async.py         # Asynchronous implementation using AsyncOpenAI & asyncio
+├── brochures/            # Unstructured company assets (Internal Margie's Travel PDF brochures)
+├── .env                  # Environment configurations (Service endpoints and deployment tags)
+├── .gitignore            # Excludes local Python runtime dependencies (.venv)
+├── requirements.txt      # Project library manifest (OpenAI, Azure Identity, Glob dependencies)
+└── tools-app.py          # Main application engine handling file orchestration, tool setup, and execution loops
 ```
 
-## 💻 Code Evolution & Implementation Journey
-### Phase 1: Authentication & Standard ChatCompletions
-Initially, I set up secure Entra ID integration and implemented the classic message-array paradigm.
+## 💻 Code Architecture Highlight
+Here is the setup for the runtime initialization and agentic instruction structure:
 
 ```bash
+# Create vector store and dynamically chunk/upload binary document matrices
+print("Creating vector store and uploading files...")
+vector_store = openai_client.vector_stores.create(name="travel-brochures")
+file_streams = [open(f, "rb") for f in glob.glob("brochures/*.pdf")]
 
-# Initializing the credential securely
-token_provider = get_bearer_token_provider(
-     DefaultAzureCredential(), "[https://ai.azure.com/.default](https://ai.azure.com/.default)"
-)
-    
-openai_client = OpenAI(
-     base_url=azure_openai_endpoint,
-     api_key=token_provider
+file_batch = openai_client.vector_stores.file_batches.upload_and_poll(
+     vector_store_id=vector_store.id,
+     files=file_streams
 )
 
-# Fetching response via legacy ChatCompletions JSON structure
-completion = openai_client.chat.completions.create(
+# Multi-Tool runtime instantiation framework inside the conversation loop
+response = openai_client.responses.create(
      model=model_deployment,
-     messages=[
-         {"role": "system", "content": "You are a helpful AI assistant."},
-         {"role": "user", "content": input_text}
+     instructions="""
+     You are a travel assistant that provides information on travel services available from Margie's Travel.
+     Answer questions about services offered by Margie's Travel using the provided travel brochures.
+     Search the web for general information about destinations or current travel advice.
+     """,
+     input=input_text,
+     previous_response_id=last_response_id,
+     tools=[
+         {"type": "file_search", "vector_store_ids": [vector_store.id]},
+         {"type": "web_search"}
      ]
 )
-
 ```
 
-## Phase 2: Upgrading to the Modern Responses API & State Tracking
-To clean up syntax and optimize model interactions, I refactored the pipeline to use the newer Responses API, while introducing a state tracker (last_response_id) to retain chat history context between inputs.
-
+## 🔧 Local Verification & Runtime Instructions
+### 1. Project Instantiation
+Ensure Python 3.13 is configured natively. Spin up your local testing sandbox:
 ```bash
-# Track response history outside the runtime loop
-last_response_id = None
-
-# Context-aware request mapping using explicit ID injection
-response = openai_client.responses.create(
-             model=model_deployment,
-             instructions="You are a helpful AI assistant.",
-             input=input_text,
-             previous_response_id=last_response_id,
-)
-last_response_id = response.id  # Cache the latest turn state
-
-```
-
-## Phase 3: Eliminating Latency with Token Streaming
-To prevent the application from appearing unresponsive during long generation cycles, I integrated streaming deltas to print text to the terminal in real-time.
-
-```bash
-stream = openai_client.responses.create(
-             model=model_deployment,
-             instructions="You are a helpful AI assistant.",
-             input=input_text,
-             previous_response_id=last_response_id,
-             stream=True
-)
-for event in stream:
-     if event.type == "response.output_text.delta":
-         print(event.delta, end="") # Direct real-time terminal output
-     elif event.type == "response.completed":
-         last_response_id = event.response.id
-
-```
-
-## Phase 4: High-Performance Asynchronous Scaling
-Finally, I built a non-blocking variant (chat-async.py) utilizing AsyncOpenAI and azure.identity.aio to release the event loop during network I/O operations.
-
-```bash
-# Asynchronous model resolution
-response = await async_client.responses.create(
-             model=model_deployment,
-             instructions="You are a helpful AI assistant.",
-             input=input_text,
-             previous_response_id=last_response_id
-)
-
-```
-
-## 🔧 Installation & Verification Playbook
-### 1. Prerequisites
-Ensure you have Python 3.13.xx, Git, and the Azure CLI configured on your environment.
-
-### 2. Local Environment Setup
-Clone the codebase, initialize your virtual environment, and pull down the packages:
-
-```bash
-# Setup environment
+# Setup local execution environment
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 
-# Install required dependencies
+# Install SDK requirements
 pip install -r requirements.txt
-
 ```
 
-### 3. Application Configuration
-Create or configure your .env file at the root of the application directory with your Azure AI Foundry resource information:
-
+### 2. Service Provisioning (.env configuration)
+Create a .env file at the directory root containing your explicit Azure OpenAI endpoints:
 ```bash
-AZURE_OPENAI_ENDPOINT="https://<your-foundry-resource-name>[.openai.azure.com/](https://.openai.azure.com/)"
-MODEL_DEPLOYMENT="gpt-4.1"
-
+AZURE_OPENAI_ENDPOINT="your_azure_openai_endpoint"
+MODEL_DEPLOYMENT="model_name"
 ```
 
-### 4. Cloud Authentication
-Authenticate your local device securely against your Azure Active Directory tenant:
-
+### 3. Active Session Authorization
+Authenticate your terminal workspace session against your Azure Active Directory tenant:
 ```bash
 az login
 ```
-### 5. Running the Applications
-To run the standard/streamed chat client:
-
+### 4. Running the Application Engine
+Fire up the script from your terminal console:
 ```bash
-python chat-app.py
-
+python tools-app.py
 ```
 
-To run the highly-performant asynchronous chat client:
+## 📋 Interactive Verification Example
+Once the engine initializes and builds the vector database, copy and paste the following sequential prompts to verify the tool routing capabilities:
 
-```bash
-python chat-async.py
+### Step A: Testing the web_search Router
+When prompted for input, paste the following real-time tracking query:
 
+```text
+What's happening in San Francisco next month?
 ```
 
-## 📈 Summary
-Through this development handson, I successfully mastered token-based cloud provider architectures, modern state-management configurations within AI clients, and decoupled asynchronous processing design patterns.
+**Expected Behavior:** The engine maps the request parameters against current timeline restrictions, fires up the Web Search agent, and reports on current live event schedules pulled from public indices.
+
+### Step B: Testing the file_search (RAG) Router
+Follow up inside the same session thread with this company-specific inquiry:
+```text
+What hotels does Margie's Travel offer there?
+```
+
+**Expected Behavior:** Maintaining dialogue state, the system acknowledges "there" as San Francisco. Recognizing a company-proprietary inquiry, it invokes the File Search engine over your vectorized internal brochures/ PDFs, extracting precise package configurations.
+
+To exit, simply type quit.
